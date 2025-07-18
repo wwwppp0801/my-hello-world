@@ -2,10 +2,10 @@
 module.exports = {
   apps: [
     {
-      name: 'hello-world-app',
+      name: 'blog-edge-app',
       script: 'npx',
       args: 'wrangler pages dev dist --ip 0.0.0.0 --port 3000',
-      cwd: '/home/user/hello-world-app',
+      cwd: '/home/user/blog-edge-app',
       env: {
         NODE_ENV: 'development',
         PORT: 3000
