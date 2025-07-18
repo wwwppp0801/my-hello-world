@@ -1,8 +1,12 @@
 import { Hono } from 'hono'
 import { renderer } from './renderer'
+import { serveStatic } from 'hono/cloudflare-workers'
 import type { Env, Blog, ApiResponse } from './types'
 
 const app = new Hono<{ Bindings: Env }>()
+
+// 服务静态文件
+app.use('/static/*', serveStatic({ root: './dist' }))
 
 app.use(renderer)
 
