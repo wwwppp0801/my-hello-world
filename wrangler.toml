@@ -1,0 +1,10 @@
+name = "paul-blog-edge-app"
+main = "src/index.tsx"
+compatibility_date = "2025-07-14"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "paul-blog-db"
+database_id = "d6e923f8-b208-416b-b70b-1c458a0e5849"
