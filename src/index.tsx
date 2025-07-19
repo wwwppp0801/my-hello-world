@@ -273,6 +273,7 @@ app.get('/blog/:slug', async (c) => {
     const slug = c.req.param('slug');
     const { env } = c;
     let blog: Blog | null = null;
+    let otherBlogs: Blog[] = [];
     
     // 尝试从数据库获取，失败则使用模拟数据
     if (env?.DB) {
@@ -281,57 +282,107 @@ app.get('/blog/:slug', async (c) => {
         blog = await env.DB.prepare(`
           SELECT * FROM blogs WHERE slug = ? AND published = 1
         `).bind(slug).first<Blog>();
+        
+        // 获取其他3篇最新博客（排除当前文章）
+        const otherBlogsResult = await env.DB.prepare(`
+          SELECT id, title, slug, created_at, excerpt
+          FROM blogs 
+          WHERE published = 1 AND slug != ?
+          ORDER BY created_at DESC
+          LIMIT 3
+        `).bind(slug).all<Blog>();
+        otherBlogs = otherBlogsResult.results || [];
       } catch (dbError) {
         console.warn('Database error, using mock data:', dbError);
-        blog = getMockBlogs().find(b => b.slug === slug) || null;
+        const mockBlogs = getMockBlogs();
+        blog = mockBlogs.find(b => b.slug === slug) || null;
+        otherBlogs = mockBlogs.filter(b => b.slug !== slug).slice(0, 3);
       }
     } else {
       // 开发环境使用模拟数据
-      blog = getMockBlogs().find(b => b.slug === slug) || null;
+      const mockBlogs = getMockBlogs();
+      blog = mockBlogs.find(b => b.slug === slug) || null;
+      otherBlogs = mockBlogs.filter(b => b.slug !== slug).slice(0, 3);
     }
     
     if (!blog) {
       return c.render(
-        <div className="container">
-          <div className="card">
-            <h2>❌ 文章未找到</h2>
-            <p>您访问的博客文章不存在或已被删除。</p>
-            <a href="/" className="button">返回首页</a>
+        <div className="blog-detail-container">
+          <div className="blog-error">
+            <div className="error-content">
+              <h2>❌ 文章未找到</h2>
+              <p>您访问的博客文章不存在或已被删除。</p>
+              <a href="/" className="button">返回首页</a>
+            </div>
           </div>
         </div>
       );
     }
     
     return c.render(
-      <div className="container">
-        <article className="blog-article">
-          <header className="blog-header">
-            <h1 className="blog-title-full">{blog.title}</h1>
-            <div className="blog-meta-full">
-              <span className="author">✍️ {blog.author}</span>
-              <span className="date">📅 {new Date(blog.created_at).toLocaleDateString('zh-CN')}</span>
+      <div className="blog-detail-container">
+        {/* 左侧导航 */}
+        <aside className="blog-sidebar">
+          <div className="sidebar-header">
+            <h3>其他文章</h3>
+          </div>
+          <nav className="sidebar-nav">
+            {otherBlogs.map((otherBlog) => (
+              <article key={otherBlog.id} className="sidebar-blog-card">
+                <h4 className="sidebar-blog-title">
+                  <a href={`/blog/${otherBlog.slug}`}>{otherBlog.title}</a>
+                </h4>
+                <p className="sidebar-blog-excerpt">{otherBlog.excerpt}</p>
+                <div className="sidebar-blog-date">
+                  📅 {new Date(otherBlog.created_at).toLocaleDateString('zh-CN')}
+                </div>
+              </article>
+            ))}
+            <div className="sidebar-footer">
+              <a href="/" className="sidebar-home-link">← 返回首页</a>
             </div>
-          </header>
-          
-          <div className="blog-content" dangerouslySetInnerHTML={{ __html: blog.content.replace(/\n/g, '<br>') }} />
-          
-          <footer className="blog-footer">
-            <div className="buttons">
-              <a href="/" className="button">← 返回首页</a>
-              <a href={`/api/blogs`} className="button">查看所有文章</a>
-            </div>
-          </footer>
-        </article>
+          </nav>
+        </aside>
+        
+        {/* 主要内容区域 */}
+        <main className="blog-main">
+          <article className="blog-article-new">
+            {/* 文章头部 */}
+            <header className="blog-header-new">
+              <h1 className="blog-title-new">{blog.title}</h1>
+              <div className="blog-meta-new">
+                <span className="blog-author">✍️ {blog.author}</span>
+                <span className="blog-date">📅 {new Date(blog.created_at).toLocaleDateString('zh-CN')}</span>
+              </div>
+            </header>
+            
+            {/* 文章内容 */}
+            <div className="blog-content-new" dangerouslySetInnerHTML={{ __html: blog.content.replace(/\n/g, '<br>') }} />
+            
+            {/* 文章底部 */}
+            <footer className="blog-footer-new">
+              <div className="blog-tags">
+                <span className="tag">技术博客</span>
+                <span className="tag">Web开发</span>
+              </div>
+              <div className="blog-actions">
+                <a href="/api/blogs" className="action-link">查看所有文章</a>
+              </div>
+            </footer>
+          </article>
+        </main>
       </div>
     );
   } catch (error) {
     console.error('Blog detail error:', error);
     return c.render(
-      <div className="container">
-        <div className="card">
-          <h2>❌ 加载错误</h2>
-          <p>文章加载失败，请稍后再试。</p>
-          <a href="/" className="button">返回首页</a>
+      <div className="blog-detail-container">
+        <div className="blog-error">
+          <div className="error-content">
+            <h2>❌ 加载错误</h2>
+            <p>文章加载失败，请稍后再试。</p>
+            <a href="/" className="button">返回首页</a>
+          </div>
         </div>
       </div>
     );
