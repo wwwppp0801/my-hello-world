@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { renderer } from './renderer'
 import { serveStatic } from 'hono/cloudflare-workers'
+import { setCookie, getCookie } from 'hono/cookie'
 import type { Env, Blog, ApiResponse } from './types'
 
 const app = new Hono<{ Bindings: Env }>()
@@ -9,6 +10,20 @@ const app = new Hono<{ Bindings: Env }>()
 app.use('/static/*', serveStatic({ root: './dist' }))
 
 app.use(renderer)
+
+// 管理员认证中间件
+const requireAuth = async (c: any, next: any) => {
+  const isAdminPath = c.req.path.startsWith('/admin') && c.req.path !== '/admin/login'
+  if (isAdminPath) {
+    const token = getCookie(c, 'admin_token')
+    if (token !== 'admin_authenticated_token_123') {
+      return c.redirect('/admin/login')
+    }
+  }
+  await next()
+}
+
+app.use('*', requireAuth)
 
 // 数据库初始化函数
 async function initDatabase(db: D1Database) {
@@ -436,6 +451,374 @@ app.get('/about', (c) => {
       </main>
     </div>
   )
+})
+
+// 管理后台登录页面
+app.get('/admin/login', (c) => {
+  return c.render(
+    <div className="admin-login-container">
+      <div className="login-form-wrapper">
+        <div className="login-header">
+          <h1>🔐 博客管理后台</h1>
+          <p>请输入管理员账号登录</p>
+        </div>
+        <form className="login-form" action="/admin/login" method="POST">
+          <div className="form-group">
+            <label htmlFor="username">用户名</label>
+            <input type="text" id="username" name="username" placeholder="请输入用户名" required />
+          </div>
+          <div className="form-group">
+            <label htmlFor="password">密码</label>
+            <input type="password" id="password" name="password" placeholder="请输入密码" required />
+          </div>
+          <button type="submit" className="login-button">登录</button>
+        </form>
+        <div className="login-footer">
+          <a href="/">← 返回博客首页</a>
+        </div>
+      </div>
+    </div>
+  )
+})
+
+// 处理登录请求
+app.post('/admin/login', async (c) => {
+  const { username, password } = await c.req.parseBody()
+  
+  if (username === 'admin123' && password === 'admin123') {
+    setCookie(c, 'admin_token', 'admin_authenticated_token_123', {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Strict',
+      maxAge: 86400 // 24小时
+    })
+    return c.redirect('/admin')
+  } else {
+    return c.render(
+      <div className="admin-login-container">
+        <div className="login-form-wrapper">
+          <div className="login-header">
+            <h1>🔐 博客管理后台</h1>
+            <p style="color: #ef4444;">用户名或密码错误，请重试</p>
+          </div>
+          <form className="login-form" action="/admin/login" method="POST">
+            <div className="form-group">
+              <label htmlFor="username">用户名</label>
+              <input type="text" id="username" name="username" placeholder="请输入用户名" required />
+            </div>
+            <div className="form-group">
+              <label htmlFor="password">密码</label>
+              <input type="password" id="password" name="password" placeholder="请输入密码" required />
+            </div>
+            <button type="submit" className="login-button">登录</button>
+          </form>
+          <div className="login-footer">
+            <a href="/">← 返回博客首页</a>
+          </div>
+        </div>
+      </div>
+    )
+  }
+})
+
+// 管理后台首页
+app.get('/admin', async (c) => {
+  const { env } = c;
+  let blogs: Blog[] = [];
+  
+  try {
+    if (env?.DB) {
+      await initDatabase(env.DB);
+      const result = await env.DB.prepare(`
+        SELECT * FROM blogs ORDER BY created_at DESC
+      `).all<Blog>();
+      blogs = result.results || [];
+    } else {
+      blogs = getMockBlogs();
+    }
+  } catch (error) {
+    console.error('Admin blogs fetch error:', error);
+    blogs = getMockBlogs();
+  }
+  
+  return c.render(
+    <div className="admin-container">
+      <header className="admin-header">
+        <div className="admin-nav">
+          <h1>📝 博客管理后台</h1>
+          <div className="admin-actions">
+            <a href="/admin/new" className="btn btn-primary">+ 写新文章</a>
+            <a href="/admin/logout" className="btn btn-secondary">退出登录</a>
+          </div>
+        </div>
+      </header>
+      
+      <main className="admin-main">
+        <div className="admin-stats">
+          <div className="stat-card">
+            <h3>总文章数</h3>
+            <span className="stat-number">{blogs.length}</span>
+          </div>
+          <div className="stat-card">
+            <h3>已发布</h3>
+            <span className="stat-number">{blogs.filter(b => b.published === 1).length}</span>
+          </div>
+          <div className="stat-card">
+            <h3>草稿</h3>
+            <span className="stat-number">{blogs.filter(b => b.published === 0).length}</span>
+          </div>
+        </div>
+        
+        <div className="blog-management">
+          <h2>文章管理</h2>
+          <div className="blog-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>标题</th>
+                  <th>作者</th>
+                  <th>状态</th>
+                  <th>创建时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {blogs.map((blog) => (
+                  <tr key={blog.id}>
+                    <td>
+                      <a href={`/blog/${blog.slug}`} target="_blank">{blog.title}</a>
+                    </td>
+                    <td>{blog.author}</td>
+                    <td>
+                      <span className={`status ${blog.published ? 'published' : 'draft'}`}>
+                        {blog.published ? '已发布' : '草稿'}
+                      </span>
+                    </td>
+                    <td>{new Date(blog.created_at).toLocaleString('zh-CN')}</td>
+                    <td>
+                      <div className="action-buttons">
+                        <a href={`/admin/edit/${blog.id}`} className="btn-small btn-edit">编辑</a>
+                        <a href={`/admin/delete/${blog.id}`} className="btn-small btn-delete" 
+                           onclick="return confirm('确定要删除这篇文章吗？')">删除</a>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div>
+  )
+})
+
+// 退出登录
+app.get('/admin/logout', (c) => {
+  setCookie(c, 'admin_token', '', { maxAge: 0 })
+  return c.redirect('/admin/login')
+})
+
+// 新建文章页面
+app.get('/admin/new', (c) => {
+  return c.render(
+    <div className="admin-container">
+      <header className="admin-header">
+        <div className="admin-nav">
+          <h1>✍️ 写新文章</h1>
+          <div className="admin-actions">
+            <a href="/admin" className="btn btn-secondary">← 返回管理</a>
+          </div>
+        </div>
+      </header>
+      
+      <main className="admin-main">
+        <form className="blog-form" action="/admin/create" method="POST">
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="title">文章标题</label>
+              <input type="text" id="title" name="title" placeholder="请输入文章标题" required />
+            </div>
+            <div className="form-group">
+              <label htmlFor="slug">文章链接</label>
+              <input type="text" id="slug" name="slug" placeholder="article-url-slug" required />
+            </div>
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="excerpt">文章摘要</label>
+            <textarea id="excerpt" name="excerpt" rows="3" placeholder="请输入文章摘要（可选）"></textarea>
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="content">文章内容</label>
+            <textarea id="content" name="content" rows="20" placeholder="请输入文章内容" required></textarea>
+          </div>
+          
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="author">作者</label>
+              <input type="text" id="author" name="author" value="Paul" />
+            </div>
+            <div className="form-group">
+              <label htmlFor="published">发布状态</label>
+              <select id="published" name="published">
+                <option value="0">草稿</option>
+                <option value="1">立即发布</option>
+              </select>
+            </div>
+          </div>
+          
+          <div className="form-actions">
+            <button type="submit" className="btn btn-primary">保存文章</button>
+            <a href="/admin" className="btn btn-secondary">取消</a>
+          </div>
+        </form>
+      </main>
+    </div>
+  )
+})
+
+// 创建文章
+app.post('/admin/create', async (c) => {
+  try {
+    const { title, slug, excerpt, content, author, published } = await c.req.parseBody()
+    const { env } = c;
+    
+    if (env?.DB) {
+      await initDatabase(env.DB);
+      await env.DB.prepare(`
+        INSERT INTO blogs (title, slug, excerpt, content, author, published)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(title, slug, excerpt || '', content, author || 'Paul', parseInt(published as string)).run();
+    }
+    
+    return c.redirect('/admin')
+  } catch (error) {
+    console.error('Create blog error:', error);
+    return c.text('创建文章失败: ' + error.message, 500)
+  }
+})
+
+// 编辑文章页面
+app.get('/admin/edit/:id', async (c) => {
+  const id = c.req.param('id');
+  const { env } = c;
+  let blog: Blog | null = null;
+  
+  try {
+    if (env?.DB) {
+      await initDatabase(env.DB);
+      blog = await env.DB.prepare(`
+        SELECT * FROM blogs WHERE id = ?
+      `).bind(id).first<Blog>();
+    } else {
+      blog = getMockBlogs().find(b => b.id === parseInt(id)) || null;
+    }
+    
+    if (!blog) {
+      return c.text('文章未找到', 404);
+    }
+    
+    return c.render(
+      <div className="admin-container">
+        <header className="admin-header">
+          <div className="admin-nav">
+            <h1>✏️ 编辑文章</h1>
+            <div className="admin-actions">
+              <a href="/admin" className="btn btn-secondary">← 返回管理</a>
+            </div>
+          </div>
+        </header>
+        
+        <main className="admin-main">
+          <form className="blog-form" action={`/admin/update/${id}`} method="POST">
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="title">文章标题</label>
+                <input type="text" id="title" name="title" value={blog.title} required />
+              </div>
+              <div className="form-group">
+                <label htmlFor="slug">文章链接</label>
+                <input type="text" id="slug" name="slug" value={blog.slug} required />
+              </div>
+            </div>
+            
+            <div className="form-group">
+              <label htmlFor="excerpt">文章摘要</label>
+              <textarea id="excerpt" name="excerpt" rows="3">{blog.excerpt}</textarea>
+            </div>
+            
+            <div className="form-group">
+              <label htmlFor="content">文章内容</label>
+              <textarea id="content" name="content" rows="20">{blog.content}</textarea>
+            </div>
+            
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="author">作者</label>
+                <input type="text" id="author" name="author" value={blog.author} />
+              </div>
+              <div className="form-group">
+                <label htmlFor="published">发布状态</label>
+                <select id="published" name="published">
+                  <option value="0" selected={blog.published === 0 ? true : false}>草稿</option>
+                  <option value="1" selected={blog.published === 1 ? true : false}>已发布</option>
+                </select>
+              </div>
+            </div>
+            
+            <div className="form-actions">
+              <button type="submit" className="btn btn-primary">更新文章</button>
+              <a href="/admin" className="btn btn-secondary">取消</a>
+            </div>
+          </form>
+        </main>
+      </div>
+    )
+  } catch (error) {
+    console.error('Edit blog fetch error:', error);
+    return c.text('获取文章失败', 500);
+  }
+})
+
+// 更新文章
+app.post('/admin/update/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const { title, slug, excerpt, content, author, published } = await c.req.parseBody()
+    const { env } = c;
+    
+    if (env?.DB) {
+      await env.DB.prepare(`
+        UPDATE blogs 
+        SET title = ?, slug = ?, excerpt = ?, content = ?, author = ?, published = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(title, slug, excerpt || '', content, author || 'Paul', parseInt(published as string), id).run();
+    }
+    
+    return c.redirect('/admin')
+  } catch (error) {
+    console.error('Update blog error:', error);
+    return c.text('更新文章失败: ' + error.message, 500)
+  }
+})
+
+// 删除文章
+app.get('/admin/delete/:id', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const { env } = c;
+    
+    if (env?.DB) {
+      await env.DB.prepare(`DELETE FROM blogs WHERE id = ?`).bind(id).run();
+    }
+    
+    return c.redirect('/admin')
+  } catch (error) {
+    console.error('Delete blog error:', error);
+    return c.text('删除文章失败: ' + error.message, 500)
+  }
 })
 
 export default app
